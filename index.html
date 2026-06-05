@@ -480,7 +480,7 @@
 </div>
 
 <div class="footer">
-  ข้อมูลโรงเรียนพื้นที่นวัตกรรมการศึกษา จังหวัดเชียงใหม่ · โหลดจาก sandbox.csv แบบ Real-time
+  ข้อมูลโรงเรียนพื้นที่นวัตกรรมการศึกษา จังหวัดเชียงใหม่ · โหลดจาก sandbox.csv
 </div>
 
 <script>
@@ -492,23 +492,47 @@ let currentPage = 1;
 const PER_PAGE = 25;
 let currentView = 'table';
 
-// ฟังก์ชันดึงและแปลงข้อมูล CSV (รองรับโรงเรียนที่มีหลักสูตรมากกว่า 1 ประเภท)
+// ฟังก์ชันแยกข้อมูล CSV ที่รองรับเครื่องหมาย "" (Double Quotes) ในข้อมูลที่มีเครื่องหมายลูกน้ำภายใน
+function parseCSVLine(line) {
+  const cols = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"' && line[i+1] === '"') {
+      current += '"';
+      i++;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      cols.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cols.push(current.trim());
+  return cols;
+}
+
 async function loadData() {
   try {
     const response = await fetch('sandbox.csv');
     if (!response.ok) throw new Error('Cannot fetch sandbox.csv');
     const csvText = await response.text();
     
-    const lines = csvText.split('\n').filter(l => l.trim() !== '');
+    // แบ่งบรรทัด (รองรับทั้ง \r\n และ \n)
+    const lines = csvText.split(/\r?\n/).filter(l => l.trim() !== '');
     
     data = lines.slice(1).map(line => {
-      const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(s => s.replace(/(^"|"$)/g, '').trim());
+      const cols = parseCSVLine(line);
       
       let types = [];
-      if (cols[6] && cols[6].match(/1/)) types.push('ประเภทที่ 1');
-      if (cols[7] && cols[7].match(/1/)) types.push('ประเภทที่ 2');
-      if (cols[8] && cols[8].match(/1/)) types.push('ประเภทที่ 3');
-      if (cols[9] && cols[9].match(/1/)) types.push('ประเภทที่ 4');
+      if (cols[6] && cols[6] !== '') types.push(cols[6].replace(/"/g, '').trim());
+      if (cols[7] && cols[7] !== '') types.push(cols[7].replace(/"/g, '').trim());
+      if (cols[8] && cols[8] !== '') types.push(cols[8].replace(/"/g, '').trim());
+      if (cols[9] && cols[9] !== '') types.push(cols[9].replace(/"/g, '').trim());
       
       return {
         id: parseInt(cols[0]) || 0,
@@ -517,8 +541,8 @@ async function loadData() {
         district: cols[3] || '',
         gen: cols[4] || '',
         year: cols[5] || '',
-        type: types.join(', '), // จับประเภทมารวมกันคั่นด้วยลูกน้ำ
-        approved: cols[10] || ''
+        type: types.join(', '), // นำทุกประเภทมารวมกันคั่นด้วยลูกน้ำ
+        approved: cols[10] ? cols[10].replace(/"/g, '').trim() : ''
       };
     }).filter(d => d.school !== '');
 
@@ -532,7 +556,7 @@ async function loadData() {
     
   } catch (err) {
     console.error('Error loading CSV:', err);
-    document.getElementById('tableView').innerHTML = `<div style="padding: 40px; text-align: center; color: var(--accent); background: var(--surface); margin: 20px;">ไม่สามารถโหลดข้อมูลจากไฟล์ sandbox.csv ได้<br><br>หากรันบนเครื่องตัวเอง โปรดรันผ่าน Local Web Server (เช่น Live Server ของ VSCode)<br>หรือเมื่ออัปโหลดขึ้น GitHub Pages แล้วจะสามารถใช้งานได้ปกติครับ</div>`;
+    document.getElementById('tableView').innerHTML = `<div style="padding: 40px; text-align: center; color: var(--accent); background: var(--surface); margin: 20px;">ไม่สามารถโหลดข้อมูลจากไฟล์ sandbox.csv ได้<br><br>หากรันบนเครื่องตัวเอง โปรดรันผ่าน Local Web Server (เช่น Live Server ของ VSCode)</div>`;
   }
 }
 
@@ -540,7 +564,7 @@ function populateFilters() {
   const sanakads = [...new Set(data.map(d=>d.sanakad))].filter(Boolean).sort();
   const gens = [...new Set(data.map(d=>d.gen))].filter(Boolean).sort();
   
-  // สร้าง Filter ประเภทแบบแยกแต่ละตัวให้เป็นเอกเทศ (กรณีมีหลายประเภท)
+  // สร้าง Filter ประเภทหลักสูตร (ถ้า 1 รร. มีหลายประเภทก็ให้แยกเอาเฉพาะค่ามา Filter ได้)
   const typesSet = new Set();
   data.forEach(d => {
     if (d.type) d.type.split(', ').forEach(t => typesSet.add(t));
@@ -572,7 +596,11 @@ function genBadge(gen) {
 function typeBadge(type) {
   if (!type) return `<span class="badge badge-type-empty">—</span>`;
   return type.split(', ').map(t => {
-    const cls = t.includes('1') ? 'badge-type1' : t.includes('2') ? 'badge-type2' : t.includes('3') ? 'badge-type3' : 'badge-type4';
+    let cls = 'badge-type-empty';
+    if (t.includes('1')) cls = 'badge-type1';
+    else if (t.includes('2')) cls = 'badge-type2';
+    else if (t.includes('3')) cls = 'badge-type3';
+    else if (t.includes('4')) cls = 'badge-type4';
     return `<span class="badge ${cls}" style="margin-right:4px">${t}</span>`;
   }).join('');
 }
@@ -687,7 +715,7 @@ function applyFilters() {
     if(q && !d.school.toLowerCase().includes(q) && !d.district.toLowerCase().includes(q) && !d.sanakad.toLowerCase().includes(q)) return false;
     if(san && d.sanakad !== san) return false;
     if(gen && d.gen !== gen) return false;
-    if(type && !d.type.includes(type)) return false; // เช็คผ่าน .includes เผื่อกรณี รร. มีหลายประเภท
+    if(type && !d.type.includes(type)) return false; 
     if(dist && d.district !== dist) return false;
     return true;
   });
